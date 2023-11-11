@@ -1,3 +1,5 @@
 *.o
 *.map
 *.com
+*.bin
+*.err

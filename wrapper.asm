@@ -4,7 +4,7 @@
         .code
         ;; this ORG line is necessary for .COM files so that the data
         ;; section will not be referred by wrong locations.
-        ORG 100h
+        ORG 7C00h
 
         ;; reference to the `main` function in C.
         extern main_: near ptr
@@ -27,12 +27,7 @@ _cstart_:
         MOV SP, 0FFFEh
 
         ;; jump to the main function in C.
-        CALL main_
-
-        ;; because this is for .COM file under DOS, one should have
-        ;; a RET instruction here. should be replaced with things
-        ;; like HLT or infinite loop if for "real" standalone programs.
-        RET
+        JMP main_
 
 __STK:
         ;; stack overflow checking.
