@@ -16,6 +16,15 @@ void outp(unsigned int port, int val);
     "out dx, al" \
     parm [dx] [ax];
 
+// Fast no-dependency string equality check
+int str_eq(char *s1, char *s2) {
+    while (*s1 && (*s1 == *s2)) {
+        s1++;
+        s2++;
+    }
+    return *s1 == *s2;
+}
+
 char input[INPUT_SIZE];
 short input_len;
 
@@ -144,21 +153,190 @@ void print_serial(char *str) {
     }
 }
 
+// Write a character on-screen with precise coordinate attributes (BIOS INT 10h, AH=09h)
+void putc_attr(char c, char attr) {
+    __asm {
+        mov ah, 0x09
+        mov al, c
+        mov bh, 0x00
+        mov bl, attr       ; Color attribute
+        mov cx, 0x01       ; Write 1 character
+        int 0x10
+        
+        ; Now advance cursor with silent write
+        mov ah, 0x0E
+        mov al, c
+        mov bh, 0x00
+        int 0x10
+    }
+}
+
+// Simple syntax-highlight printer for assembly lines
+void print_highlight(char *line) {
+    char *c = line;
+    char word[32];
+    short idx = 0;
+    short j;
+    char color;
+    
+    // Check if line is a comment
+    while (*c == ' ' || *c == '\t') {
+        putc(*c);
+        c++;
+    }
+    if (*c == ';') {
+        while (*c) {
+            putc_attr(*c, 8);
+            c++;
+        }
+        return;
+    }
+    
+    // Parse word by word
+    while (*c) {
+        if (*c == ' ' || *c == ',' || *c == '\t' || *c == ';' || *c == '\r' || *c == '\n') {
+            word[idx] = '\0';
+            if (idx > 0) {
+                color = 7; // Default: Light Gray
+                
+                // Opcode check
+                if (str_eq(word, "mov") || str_eq(word, "int") || 
+                    str_eq(word, "push") || str_eq(word, "pop") || 
+                    str_eq(word, "retf") || str_eq(word, "xor") || 
+                    str_eq(word, "add") || str_eq(word, "sub") || 
+                    str_eq(word, "dec") || str_eq(word, "inc") || 
+                    str_eq(word, "out") || str_eq(word, "in") || 
+                    str_eq(word, "cmp") || str_eq(word, "jmp")) {
+                    color = 14; // Bright Yellow for Opcodes
+                }
+                else if (word[idx - 1] == 'h' || (word[0] == '0' && word[1] == 'x')) {
+                    color = 10; // Light Green for Hex values
+                }
+                
+                // Print buffered word in color
+                j = 0;
+                while (word[j]) {
+                    putc_attr(word[j], color);
+                    j++;
+                }
+                idx = 0;
+            }
+            
+            // Print delimiter
+            if (*c == ';') {
+                while (*c) {
+                    putc_attr(*c, 8);
+                    c++;
+                }
+                break;
+            } else {
+                putc(*c);
+            }
+        } else {
+            if (idx < 31) {
+                word[idx++] = *c;
+            }
+        }
+        c++;
+    }
+    
+    // Print remain
+    if (idx > 0) {
+        word[idx] = '\0';
+        color = 7;
+        if (str_eq(word, "retf")) color = 14;
+        
+        j = 0;
+        while (word[j]) {
+            putc_attr(word[j], color);
+            j++;
+        }
+    }
+}
+
 // Securely load raw compiled x86 machine bytes into segment 2000h:0000h and execute!
 void load_and_execute_payload(unsigned int size) {
-    // Construct segmented far pointers using explicit segment/offset math to prevent compiler cast truncation
     char far *loader_ptr = (char far *)(((unsigned long)0x2000 << 16) | 0x0000);
     void (far *run_payload)(void) = (void (far *)(void))(((unsigned long)0x2000 << 16) | 0x0000);
     unsigned int i;
-    
-    // Read exact payload bytes from hardware FIFO buffer and copy directly into memory sandbox
     for (i = 0; i < size; i++) {
         *loader_ptr = read_serial();
         loader_ptr++;
     }
-    
-    // Far Call the payload. When compiled code finishes with RETF, control returns right back!
     run_payload();
+}
+
+// Handle Tool Call parsing and execution confirmation
+void handle_tool_call(void) {
+    char buf[128];
+    short idx = 0;
+    char c;
+    
+    // 1. Read and print description string (terminated by newline)
+    print("\r\n--- AI Agent Tool Request ---\r\n");
+    print("Action proposed: ");
+    while (1) {
+        c = read_serial();
+        if (c == '\n') {
+            print("\r\n");
+            break;
+        }
+        putc_attr(c, 11); // Print description in Cyan (Color 11)
+    }
+    
+    // 2. Read and print highlighted assembly code block (until terminated by \x00)
+    print("\r\n[ASM Payload Draft]:\r\n");
+    print("----------------------------------------\r\n");
+    while (1) {
+        c = read_serial();
+        if (c == 0) {
+            break; // Finished reading assembly body
+        }
+        if (c == '\n') {
+            buf[idx] = '\0';
+            print_highlight(buf);
+            print("\r\n");
+            idx = 0;
+        } else {
+            if (idx < 127) {
+                buf[idx++] = c;
+            }
+        }
+    }
+    print("----------------------------------------\r\n");
+    
+    // 3. User confirmation loop
+    while (1) {
+        print("Execute this assembly code? (y/n): ");
+        c = getc();
+        putc(c); // Echo key
+        print("\r\n");
+        if (c == 'y' || c == 'Y') {
+            write_serial('y'); // Signal YES to the compiler bridge
+            
+            // Wait for compiled binary header (ESC + 'X' + size)
+            c = read_serial();
+            if (c == 0x1B) {
+                char cmd_id = read_serial();
+                if (cmd_id == 'X') {
+                    unsigned char size_low = read_serial();
+                    unsigned char size_high = read_serial();
+                    unsigned int bin_size = size_low | (size_high << 8);
+                    
+                    print("Compiling and launching payload...\r\n");
+                    load_and_execute_payload(bin_size);
+                    print("Payload finished execution. Returning to shell.\r\n");
+                }
+            }
+            break;
+        } else if (c == 'n' || c == 'N') {
+            write_serial('n'); // Signal NO to the compiler bridge
+            print("Aborted. Code execution skipped.\r\n");
+            break;
+        } else {
+            print("Invalid typing. Choose y or n.\r\n");
+        }
+    }
 }
 
 // Send prompts to LLM and retrieve streaming text back over serial
@@ -174,16 +352,9 @@ void ask_ai(void) {
         if (serial_received()) {
             c = inp(PORT_COM1);
             if (c == 0x1B) { // ESC!
-                // Read next byte to ensure Command ID match 'X' (0x58)
                 char cmd_id = read_serial();
-                if (cmd_id == 'X') {
-                    // Read 16-bit little-endian binary size
-                    unsigned char size_low = read_serial();
-                    unsigned char size_high = read_serial();
-                    unsigned int bin_size = size_low | (size_high << 8);
-                    
-                    // Route bytes directly to segment execution loader
-                    load_and_execute_payload(bin_size);
+                if (cmd_id == 'T') { // Tool Call!
+                    handle_tool_call();
                 }
             } else if (c == 4) { // EOT (ASCII End of Transmission) marker
                 break;
@@ -202,7 +373,7 @@ void eval_shell(void) {
     if (input[0] == '!') {
         if (input[1] == 'h' && input[2] == 'e' && input[3] == 'l' && input[4] == 'p' && input[5] == '\0') {
             print("rejectDOS Help:\r\n");
-            print("  <text> : Chat in real-time with LLM (default)\r\n");
+            print("  <text> : Chat with the LLM Agent (default)\r\n");
             print("  !<expr>: Solve math or roll dice (e.g. !2d6+5, !10*5)\r\n");
             print("  !help  : Show this help message\r\n");
         } else {
@@ -227,7 +398,7 @@ int main(void) {
     
     // Boot help welcome banner
     print("Welcome to rejectDOS!\r\n");
-    print("  Type anything to converse with the LLM.\r\n");
+    print("  Type anything to converse with the LLM Agent.\r\n");
     print("  Use ! prefix to execute math or dice (e.g. !2d20, !10*5).\r\n");
     print("  Type !help for info.\r\n\r\n");
     
