@@ -1,19 +1,57 @@
 #include "term.c"
 
-#define INPUT_SIZE 32
+#define INPUT_SIZE 64
 
 char input[INPUT_SIZE];
 short input_len;
 
-// Pad args to 32-bit unsigned long to match the 32-bit Rust Stack alignment
-extern unsigned int __cdecl eval(unsigned long input_ptr_32, unsigned long input_len_32);
+// Native 16-bit Real Mode Evaluator in C
+unsigned int eval(char *input_ptr, short len) {
+    char *c = input_ptr;
+    char *end = input_ptr + len;
+    unsigned int res = 0;
+    unsigned int temp = 0;
+    char op = '+';
+    
+    while (c < end) {
+        char ch = *c;
+        if (ch >= '0' && ch <= '9') {
+            temp = temp * 10 + (ch - '0');
+        } else if (ch == '+' || ch == '-' || ch == '*' || ch == '/' || ch == '%') {
+            if (op == '+') res += temp;
+            else if (op == '-') res -= temp;
+            else if (op == '*') res *= temp;
+            else if (op == '/') {
+                if (temp != 0) res /= temp;
+                else res = 0;
+            }
+            else if (op == '%') {
+                if (temp != 0) res %= temp;
+                else res = 0;
+            }
+            temp = 0;
+            op = ch;
+        }
+        c++;
+    }
+    
+    if (op == '+') res += temp;
+    else if (op == '-') res -= temp;
+    else if (op == '*') res *= temp;
+    else if (op == '/') {
+        if (temp != 0) res /= temp;
+        else res = 0;
+    }
+    else if (op == '%') {
+        if (temp != 0) res %= temp;
+        else res = 0;
+    }
+    
+    return res;
+}
 
 void eval_shell() {
-    // Cast variables to 32-bit unsigned longs to push exactly 4 bytes each
-    unsigned long input_ptr_32 = (unsigned long)(unsigned int)input;
-    unsigned long input_len_32 = (unsigned long)(unsigned int)input_len;
-    
-    unsigned int res = eval(input_ptr_32, input_len_32);
+    unsigned int res = eval(input, input_len);
     print("= ");
     printnum(res);
 }
