@@ -1,0 +1,22 @@
+#!/bin/bash
+# Simple script to demonstrate the concept without full build
+
+echo "This is the rejectDOS project - a 16-bit DOS bootloader/OS utility"
+echo "It creates a simple interactive shell that would run on 16-bit DOS systems"
+echo ""
+echo "In a full build environment, this would:"
+echo "1. Compile C++ code using OpenWatcom compiler"
+echo "2. Assemble with 16-bit assembly wrapper"
+echo "3. Link with DOS .COM format"
+echo "4. Pad to 512 bytes with boot signature"
+echo ""
+echo "The project demonstrates:"
+echo "- BIOS interrupt-based terminal I/O"
+echo "- 16-bit x86 assembly integration"
+echo "- DOS .COM file format"
+echo "- Simple command-line interface"
+echo ""
+echo "To run this project properly, you'd need:"
+echo "1. OpenWatcom compiler (wpp, wasm, wlink)"
+echo "2. QEMU emulator"
+echo "3. Proper DOS environment"
