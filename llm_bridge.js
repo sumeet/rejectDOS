@@ -1,4 +1,6 @@
 const net = require('net');
+const fs = require('fs');
+const { execSync } = require('child_process');
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 if (!OPENROUTER_API_KEY) {
@@ -8,7 +10,34 @@ if (!OPENROUTER_API_KEY) {
 
 const SERIAL_PORT = 4444;
 
-console.log("Starting Low-Level LLM serial bridge...");
+console.log("Starting Advanced LLM-to-x86 Assembly Compiler serial bridge...");
+
+function compileAssembly(asmCode) {
+    console.log("[Bridge] Compiling ASM payload via NASM...");
+    const tempAsmPath = "/tmp/ai_code.asm";
+    const tempBinPath = "/tmp/ai_code.bin";
+
+    // Clean up previous files if any
+    if (fs.existsSync(tempAsmPath)) fs.unlinkSync(tempAsmPath);
+    if (fs.existsSync(tempBinPath)) fs.unlinkSync(tempBinPath);
+
+    // Write raw assembly text
+    fs.writeFileSync(tempAsmPath, asmCode, 'utf-8');
+
+    try {
+        // Compile to pure flat binary
+        execSync(`nasm -f bin ${tempAsmPath} -o ${tempBinPath}`);
+        if (!fs.existsSync(tempBinPath)) {
+            throw new Error("NASM compilation completed, but no binary file was created.");
+        }
+        const binData = fs.readFileSync(tempBinPath);
+        console.log(`[Bridge] NASM compilation successful! Generated ${binData.length} bytes of machine code.`);
+        return { success: true, data: binData };
+    } catch (err) {
+        console.error("[Bridge] NASM compilation failed:", err.message);
+        return { success: false, error: err.message };
+    }
+}
 
 function connectToSerial() {
     const client = net.createConnection({ port: SERIAL_PORT, host: '127.0.0.1' }, () => {
@@ -25,38 +54,75 @@ function connectToSerial() {
             const prompt = buffer.trim();
             buffer = ""; // Clear buffer
             
-            console.log(`\n[OS -> Serial] received prompt: "${prompt}"`);
+            console.log(`\n[OS -> Serial] received query: "${prompt}"`);
             
             try {
-                console.log("[Bridge] Dispatching query to OpenRouter...");
+                console.log("[Bridge] Dispatching compiler request to OpenRouter...");
                 const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
                     method: "POST",
                     headers: {
                         "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
                         "Content-Type": "application/json",
-                        "HTTP-Referer": "https://rejectdos.org", // Optional
-                        "X-Title": "rejectDOS 16-bit OS" // Optional
+                        "HTTP-Referer": "https://rejectdos.org",
+                        "X-Title": "rejectDOS 16-bit OS"
                     },
                     body: JSON.stringify({
                         model: "openrouter/free",
                         messages: [
-                            { role: "system", content: "You are an AI assistant running inside a 16-bit real-mode custom Operating System called rejectDOS. Keep answers extremely short and concise (under 2-3 sentences), with plain ASCII characters, because terminal space is limited. Avoid markdown formatting." },
+                            { 
+                                role: "system", 
+                                content: "You are the AI chief engineer of rejectDOS, a 16-bit real-mode custom OS. When a user asks you to interact with local hardware, change screen parameters, play sound, clear the screen, read disk directories, or execute a task, you can write native real-mode x86 assembly to do it! To execute arbitrary code, output an [ASM] block ending with [/ASM]. Keep standard text descriptions outside the block exceedingly short, as screen buffer space is small in real-mode terminal.\n\nCRITICAL ASSEMBLY PRINCIPLES:\n1. We are in 16-bit Real Mode (8086/286/386 compatible).\n2. Write pure flat, unsegmented nasm syntax.\n3. The code will be compiled to raw binary. DO NOT include section or org statements.\n4. You MUST end your machine code with a RETF (Far Return, 0xCB) so control is safely handed back to the OS shell!\n5. Keep registers saved (push/pop) if you modify segment pointers. Segment 2000h:0000h is free for your sandbox code.\n\nExample to clear screen:\n[ASM]\nmov ah, 06h\nmov al, 00h\nmov bh, 07h\nmov cx, 0000h\nmov dx, 184Fh\nint 10h\nmov ah, 02h\nmov bh, 00h\nmov dx, 0000h\nint 10h\nretf\n[/ASM]" 
+                            },
                             { role: "user", content: prompt }
                         ]
                     })
                 });
 
                 const result = await response.json();
-                const reply = result.choices?.[0]?.message?.content || "Error: Empty response from model.";
+                let reply = result.choices?.[0]?.message?.content || "Error: Empty response from model.";
                 
-                console.log(`[Serial -> OS] replying: "${reply}"`);
-                
-                // Write reply line-by-line of ASCII, and end with the EOT (\x04) marker
-                client.write(reply + "\n\x04");
+                console.log(`[LLM Response]:\n${reply}\n-------------------`);
+
+                // Parse for [ASM]...[/ASM] block
+                const asmMatch = reply.match(/\[ASM\]([\s\S]*?)\[\/ASM\]/i);
+                if (asmMatch) {
+                    const asmCode = asmMatch[1].trim();
+                    const compileResult = compileAssembly(asmCode);
+
+                    if (compileResult.success) {
+                        // Strip [ASM] block from the chat reply so it doesnt print on screen
+                        const textReply = reply.replace(/\[ASM\][\s\S]*?\[\/ASM\]/gi, "").trim();
+                        
+                        // Send text reply to OS terminal first
+                        if (textReply) {
+                            client.write(textReply + "\n");
+                        }
+                        
+                        // Send the Escape execution instruction: 0x1B (ESC) + 'X' (0x58) + 16-bit size + Bytes
+                        const size = compileResult.data.length;
+                        const header = Buffer.alloc(4);
+                        header[0] = 0x1B; // ESC
+                        header[1] = 0x58; // 'X'
+                        header[2] = size & 0xFF; // Low byte of size
+                        header[3] = (size >> 8) & 0xFF; // High byte of size
+
+                        console.log(`[Bridge] Streaming header and ${size} bytes of binary payload...`);
+                        client.write(header);
+                        client.write(compileResult.data);
+                        client.write(Buffer.from([0x04])); // Terminate with EOT
+                        
+                    } else {
+                        // If compilation fails, broadcast compilation error back to terminal screen
+                        client.write(`AI Code Compiler Error:\n${compileResult.error}\n\x04`);
+                    }
+                } else {
+                    // Normal text conversation with no code execution
+                    client.write(reply + "\n\x04");
+                }
                 
             } catch (err) {
                 console.error("Bridge Error: ", err);
-                client.write(`Bridge Connection Error: ${err.message}\n\x04`);
+                client.write(`Bridge Error: ${err.message}\n\x04`);
             }
         }
     });

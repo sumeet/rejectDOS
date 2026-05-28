@@ -6,15 +6,15 @@
 // Compiler inline assembly instructions via Watcom auxiliary pragmas
 int inp(unsigned int port);
 #pragma aux inp = \
+    "xor ax, ax" \
     "in al, dx" \
     parm [dx] \
     value [ax];
 
-int outp(unsigned int port, int val);
+void outp(unsigned int port, int val);
 #pragma aux outp = \
     "out dx, al" \
-    parm [dx] [ax] \
-    value [ax];
+    parm [dx] [ax];
 
 char input[INPUT_SIZE];
 short input_len;
@@ -124,6 +124,12 @@ int serial_received(void) {
     return inp(PORT_COM1 + 5) & 1;
 }
 
+// Read single character from serial (wait until ready)
+char read_serial(void) {
+    while (serial_received() == 0);
+    return inp(PORT_COM1);
+}
+
 // Write byte over serial UART
 void write_serial(char a) {
     while ((inp(PORT_COM1 + 5) & 0x20) == 0);
@@ -138,6 +144,23 @@ void print_serial(char *str) {
     }
 }
 
+// Securely load raw compiled x86 machine bytes into segment 2000h:0000h and execute!
+void load_and_execute_payload(unsigned int size) {
+    // Construct segmented far pointers using explicit segment/offset math to prevent compiler cast truncation
+    char far *loader_ptr = (char far *)(((unsigned long)0x2000 << 16) | 0x0000);
+    void (far *run_payload)(void) = (void (far *)(void))(((unsigned long)0x2000 << 16) | 0x0000);
+    unsigned int i;
+    
+    // Read exact payload bytes from hardware FIFO buffer and copy directly into memory sandbox
+    for (i = 0; i < size; i++) {
+        *loader_ptr = read_serial();
+        loader_ptr++;
+    }
+    
+    // Far Call the payload. When compiled code finishes with RETF, control returns right back!
+    run_payload();
+}
+
 // Send prompts to LLM and retrieve streaming text back over serial
 void ask_ai(void) {
     char c;
@@ -150,10 +173,21 @@ void ask_ai(void) {
     while (1) {
         if (serial_received()) {
             c = inp(PORT_COM1);
-            if (c == 4) { // EOT (ASCII End of Transmission) marker
+            if (c == 0x1B) { // ESC!
+                // Read next byte to ensure Command ID match 'X' (0x58)
+                char cmd_id = read_serial();
+                if (cmd_id == 'X') {
+                    // Read 16-bit little-endian binary size
+                    unsigned char size_low = read_serial();
+                    unsigned char size_high = read_serial();
+                    unsigned int bin_size = size_low | (size_high << 8);
+                    
+                    // Route bytes directly to segment execution loader
+                    load_and_execute_payload(bin_size);
+                }
+            } else if (c == 4) { // EOT (ASCII End of Transmission) marker
                 break;
-            }
-            if (c == '\n') {
+            } else if (c == '\n') {
                 print("\r\n");
             } else {
                 putc(c);
@@ -166,7 +200,6 @@ void ask_ai(void) {
 void eval_shell(void) {
     // Check if input begins with '!' for built-in or math actions
     if (input[0] == '!') {
-        // Match '!help'
         if (input[1] == 'h' && input[2] == 'e' && input[3] == 'l' && input[4] == 'p' && input[5] == '\0') {
             print("rejectDOS Help:\r\n");
             print("  <text> : Chat in real-time with LLM (default)\r\n");
