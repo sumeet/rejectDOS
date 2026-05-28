@@ -141,10 +141,9 @@ void print_serial(char *str) {
 // Send prompts to LLM and retrieve streaming text back over serial
 void ask_ai(void) {
     char c;
-    print("Connecting to OpenRouter LLM...\r\n");
     
-    // Write prompt message over serial
-    print_serial(&input[3]);
+    // Write entire prompt message over serial
+    print_serial(input);
     write_serial('\n'); // Trigger line detection on bridge
     
     // Receive and echo characters until End of Transmission (EOT)
@@ -165,14 +164,26 @@ void ask_ai(void) {
 }
 
 void eval_shell(void) {
-    // Check if input begins with "ai " prefix
-    if (input[0] == 'a' && input[1] == 'i' && input[2] == ' ') {
-        ask_ai();
+    // Check if input begins with '!' for built-in or math actions
+    if (input[0] == '!') {
+        // Match '!help'
+        if (input[1] == 'h' && input[2] == 'e' && input[3] == 'l' && input[4] == 'p' && input[5] == '\0') {
+            print("rejectDOS Help:\r\n");
+            print("  <text> : Chat in real-time with LLM (default)\r\n");
+            print("  !<expr>: Solve math or roll dice (e.g. !2d6+5, !10*5)\r\n");
+            print("  !help  : Show this help message\r\n");
+        } else {
+            // Evaluate mathematical/dice expressions (starting index 1, skip '!')
+            unsigned int res = eval(&input[1], input_len - 1);
+            print("= ");
+            printnum(res);
+            print("\r\n");
+        }
     } else {
-        // Evaluate mathematical operations
-        unsigned int res = eval(input, input_len);
-        print("= ");
-        printnum(res);
+        // Default to routing directly through LLM
+        if (input_len > 0) {
+            ask_ai();
+        }
     }
 }
 
@@ -180,6 +191,12 @@ int main(void) {
     char c;
     seed_random(); // Seed PRNG
     init_serial(); // Initialize COM1 UART Serial Port
+    
+    // Boot help welcome banner
+    print("Welcome to rejectDOS!\r\n");
+    print("  Type anything to converse with the LLM.\r\n");
+    print("  Use ! prefix to execute math or dice (e.g. !2d20, !10*5).\r\n");
+    print("  Type !help for info.\r\n\r\n");
     
     while (1) {
         print("> ");
