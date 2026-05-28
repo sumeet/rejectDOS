@@ -133,9 +133,18 @@ int serial_received(void) {
     return inp(PORT_COM1 + 5) & 1;
 }
 
-// Read single character from serial (wait until ready)
-char read_serial(void) {
-    while (serial_received() == 0);
+// Read serial byte with strict hardware tick timeout (returns - 1 on timeout)
+int read_serial_timeout(unsigned int max_ticks) {
+    unsigned int far *timer_ptr = (unsigned int far *)0x0040006C;
+    unsigned int start_ticks = *timer_ptr;
+    
+    while (serial_received() == 0) {
+        unsigned int current_ticks = *timer_ptr;
+        unsigned int delta = current_ticks - start_ticks;
+        if (delta > max_ticks) {
+            return -1; // Timeout threshold reached
+        }
+    }
     return inp(PORT_COM1);
 }
 
@@ -158,16 +167,16 @@ void putc_attr(char c, char attr) {
     __asm {
         mov ah, 0x09
         mov al, c
-        mov bh, 0x00
+        mov bh, 00h
         mov bl, attr       ; Color attribute
         mov cx, 0x01       ; Write 1 character
-        int 0x10
+        int 10h
         
         ; Now advance cursor with silent write
         mov ah, 0x0E
         mov al, c
-        mov bh, 0x00
-        int 0x10
+        mov bh, 00h
+        int 10h
     }
 }
 
@@ -255,28 +264,40 @@ void print_highlight(char *line) {
 }
 
 // Securely load raw compiled x86 machine bytes into segment 2000h:0000h and execute!
-void load_and_execute_payload(unsigned int size) {
+int load_and_execute_payload(unsigned int size) {
     char far *loader_ptr = (char far *)(((unsigned long)0x2000 << 16) | 0x0000);
     void (far *run_payload)(void) = (void (far *)(void))(((unsigned long)0x2000 << 16) | 0x0000);
     unsigned int i;
     for (i = 0; i < size; i++) {
-        *loader_ptr = read_serial();
+        int next_byte = read_serial_timeout(55); // 3 seconds timeout for streaming bytes
+        if (next_byte == -1) {
+            print("\r\n[Fatal: Payload transmission timeout! Skip.]\r\n");
+            return 0; // Abort
+        }
+        *loader_ptr = (char)next_byte;
         loader_ptr++;
     }
     run_payload();
+    return 1; // Success
 }
 
 // Handle Tool Call parsing and execution confirmation
 void handle_tool_call(void) {
     char buf[128];
     short idx = 0;
+    int next_char;
     char c;
     
     // 1. Read and print description string (terminated by newline)
     print("\r\n--- AI Agent Tool Request ---\r\n");
     print("Action proposed: ");
     while (1) {
-        c = read_serial();
+        next_char = read_serial_timeout(91); // 5 seconds timeout for description stream
+        if (next_char == -1) {
+            print("\r\n[Error: Description read timeout. Aborting.]\r\n");
+            return;
+        }
+        c = (char)next_char;
         if (c == '\n') {
             print("\r\n");
             break;
@@ -288,7 +309,12 @@ void handle_tool_call(void) {
     print("\r\n[ASM Payload Draft]:\r\n");
     print("----------------------------------------\r\n");
     while (1) {
-        c = read_serial();
+        next_char = read_serial_timeout(91); // 5 seconds timeout for assembly body
+        if (next_char == -1) {
+            print("\r\n[Error: Assembly block read timeout. Aborting.]\r\n");
+            return;
+        }
+        c = (char)next_char;
         if (c == 0) {
             break; // Finished reading assembly body
         }
@@ -315,18 +341,21 @@ void handle_tool_call(void) {
             write_serial('y'); // Signal YES to the compiler bridge
             
             // Wait for compiled binary header (ESC + 'X' + size)
-            c = read_serial();
-            if (c == 0x1B) {
-                char cmd_id = read_serial();
+            next_char = read_serial_timeout(182); // 10 seconds timeout for compilation
+            if (next_char == 0x1B) {
+                int cmd_id = read_serial_timeout(36);
                 if (cmd_id == 'X') {
-                    unsigned char size_low = read_serial();
-                    unsigned char size_high = read_serial();
-                    unsigned int bin_size = size_low | (size_high << 8);
-                    
-                    print("Compiling and launching payload...\r\n");
-                    load_and_execute_payload(bin_size);
-                    print("Payload finished execution. Returning to shell.\r\n");
+                    int size_low = read_serial_timeout(36);
+                    int size_high = read_serial_timeout(36);
+                    if (size_low != -1 && size_high != -1) {
+                        unsigned int bin_size = (unsigned char)size_low | ((unsigned char)size_high << 8);
+                        print("Compiling and launching payload...\r\n");
+                        load_and_execute_payload(bin_size);
+                        print("Payload finished execution. Returning to shell.\r\n");
+                    }
                 }
+            } else {
+                print("[Error: No compilation header received. Aborting.]\r\n");
             }
             break;
         } else if (c == 'n' || c == 'N') {
@@ -341,7 +370,11 @@ void handle_tool_call(void) {
 
 // Send prompts to LLM and retrieve streaming text back over serial
 void ask_ai(void) {
+    int next_char;
     char c;
+    unsigned int far *timer_ptr = (unsigned int far *)0x0040006C;
+    unsigned int start_ticks = *timer_ptr;
+    unsigned int max_wait = 364; // Wait up to 20 seconds for the first character response
     
     // Write entire prompt message over serial
     print_serial(input);
@@ -349,20 +382,36 @@ void ask_ai(void) {
     
     // Receive and echo characters until End of Transmission (EOT)
     while (1) {
-        if (serial_received()) {
-            c = inp(PORT_COM1);
-            if (c == 0x1B) { // ESC!
-                char cmd_id = read_serial();
-                if (cmd_id == 'T') { // Tool Call!
-                    handle_tool_call();
-                }
-            } else if (c == 4) { // EOT (ASCII End of Transmission) marker
-                break;
-            } else if (c == '\n') {
-                print("\r\n");
-            } else {
-                putc(c);
+        // Safe timeout block waiting for serial ready
+        while (serial_received() == 0) {
+            unsigned int current_ticks = *timer_ptr;
+            unsigned int delta = current_ticks - start_ticks;
+            if (delta > max_wait) {
+                print("\r\n[Error: AI Agent response timeout. Rescheduling...]\r\n");
+                return; // Return safely to terminal!
             }
+        }
+        
+        c = inp(PORT_COM1);
+        
+        // Reset timers dynamically and shrink the window to 3 seconds for streaming
+        start_ticks = *timer_ptr;
+        max_wait = 55;
+        
+        if (c == 0x1B) { // ESC!
+            int cmd_id = read_serial_timeout(36); // Wait up to 2 seconds for command ID
+            if (cmd_id == 'T') { // Tool Call!
+                handle_tool_call();
+                // Reset timer limits after tool returns
+                start_ticks = *timer_ptr;
+                max_wait = 55;
+            }
+        } else if (c == 4) { // EOT (ASCII End of Transmission) marker
+            break;
+        } else if (c == '\n') {
+            print("\r\n");
+        } else {
+            putc(c);
         }
     }
     print("\r\n");
