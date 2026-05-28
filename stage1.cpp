@@ -61,4 +61,4 @@ int main() {
 
 
 // for some reason the linker keeps looking for this, so...
-char __wcpp_4_data_init_fs_root_ = '\0';
+extern "C" char __wcpp_4_data_init_fs_root_ = '\0';

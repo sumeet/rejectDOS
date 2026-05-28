@@ -3,3 +3,6 @@
 *.com
 *.bin
 *.err
+*.obj
+*.lnk
+rust_lib/target/

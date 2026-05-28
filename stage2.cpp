@@ -3,60 +3,33 @@
 
 #include "term.cpp"
 
-#define INPUT_SIZE 512
-#define TOKENS_SIZE 128
+#define INPUT_SIZE 64
 
 char input[INPUT_SIZE];
 short input_len;
 
-struct StringView {
-  char *data;
-  unsigned int len;
-};
-
-enum TokenType {
-  TokenNumber,
-  TokenOperator,
-};
-
-struct Token {
-  TokenType type;
-  StringView value;
-};
-
-Token tokens[TOKENS_SIZE];
-short tokens_len;
-
-void tokenize(char *input) {
-  tokens_len = 0;
-  char *c = input;
-  while (*c) {
-    if (*c >= '0' && *c <= '9') {
-      char *start = c;
-      //while (*c >= '0' && *c <= '9') c++;
-      Token token = tokens[tokens_len++];
-      token.type = TokenNumber;
-      token.value.data = start;
-      token.value.len = c - start;
-    } else if (*c == '+') {
-    //} else if (*c == '+' || *c == '-' || *c == '*' || *c == '/') {
-      Token token = tokens[tokens_len++];
-      token.type = TokenOperator;
-      token.value.data = c;
-    } else if (*c == ' ') {
-      // do nothing
-    } else {
-      putc(*c);
-      return;
-    }
-    c++;
-  }
-}
-
 void eval() {
-    print("evaluating: ");
-    println(input);
-    tokenize(input);
+    char *c = input;
+    unsigned int res = 0;
+    unsigned int temp = 0;
+    char op = '+';
+    
+    while (*c) {
+        if (*c >= '0' && *c <= '9') {
+            temp = temp * 10 + (*c - '0');
+        } else if (*c == '+' || *c == '-') {
+            if (op == '+') res += temp;
+            else if (op == '-') res -= temp;
+            temp = 0;
+            op = *c;
+        }
+        c++;
+    }
+    if (op == '+') res += temp;
+    else if (op == '-') res -= temp;
+    
+    print("= ");
+    printnum(res);
 }
 
 int main(void) {
@@ -70,6 +43,7 @@ int main(void) {
                 case '\r':
                     cmd_done = 1;
                     print("\r\n");
+                    input[input_len] = '\0'; // Fix: Ensure null-terminated
                     eval();
                     break;
                 case 127:
@@ -90,4 +64,4 @@ int main(void) {
 }
 
 // for some reason the linker keeps looking for this, so...
-char __wcpp_4_data_init_fs_root_ = '\0';
+extern "C" char __wcpp_4_data_init_fs_root_ = '\0';

@@ -11,4 +11,4 @@ wpp -0 -os -ms \
   -we \
   -zl -xd stage1.cpp # cpp
 wlink @stage1.lnk
-./pad_bootloader.py
+python3 pad_bootloader.py
