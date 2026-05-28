@@ -13,7 +13,7 @@ const SERIAL_PORT = 4444;
 console.log("Starting Advanced LLM-to-x86 Assembly Compiler serial bridge...");
 
 function compileAssembly(asmCode) {
-    console.log("[Bridge] Compiling ASM payload via NASM...");
+    console.log("[Bridge] Sanitizing and compiling ASM payload via NASM...");
     const tempAsmPath = "/tmp/ai_code.asm";
     const tempBinPath = "/tmp/ai_code.bin";
 
@@ -21,8 +21,45 @@ function compileAssembly(asmCode) {
     if (fs.existsSync(tempAsmPath)) fs.unlinkSync(tempAsmPath);
     if (fs.existsSync(tempBinPath)) fs.unlinkSync(tempBinPath);
 
-    // Write raw assembly text
-    fs.writeFileSync(tempAsmPath, asmCode, 'utf-8');
+    // Auto-sanitizer: If the model grouped multiple instructions on a single line, 
+    // split them by searching for inline opcodes (e.g. "mov", "int", "push", "pop", "retf") 
+    // preceded by space and insert linebreaks!
+    let sanitizedCode = asmCode;
+    const opcodes = ["mov", "int", "push", "pop", "ret", "retf", "xor", "add", "sub", "dec", "inc", "out", "in", "jmp", "jnz", "jz", "je", "jne", "cmp", "lea", "call"];
+    
+    // Split combined instruction strings
+    let lines = sanitizedCode.split('\n');
+    let dynamicAsm = [];
+    for (let line of lines) {
+        let trimmed = line.trim();
+        if (!trimmed) continue;
+        
+        // Find individual instructions in case they were joined by spaces (e.g. "mov ah, 06h mov al, 00h")
+        // We tokenise and look for opcode triggers
+        let words = trimmed.split(/\s+/);
+        let currentInstruction = [];
+        
+        for (let word of words) {
+            // Clean comma-attached words to find clean triggers (e.g. "retf" or "xor")
+            let cleanWord = word.toLowerCase().replace(/[,:;]/g, "");
+            
+            if (opcodes.includes(cleanWord) && currentInstruction.length > 0) {
+                // We hit a new opcode on the same line! Flush the previous instruction
+                dynamicAsm.push(currentInstruction.join(" "));
+                currentInstruction = [word];
+            } else {
+                currentInstruction.push(word);
+            }
+        }
+        if (currentInstruction.length > 0) {
+            dynamicAsm.push(currentInstruction.join(" "));
+        }
+    }
+    sanitizedCode = dynamicAsm.join('\n');
+    console.log(`[Bridge] Sanitized Assembly code:\n${sanitizedCode}\n-------------------`);
+
+    // Write sanitized assembly out
+    fs.writeFileSync(tempAsmPath, sanitizedCode, 'utf-8');
 
     try {
         // Compile to pure flat binary
@@ -71,7 +108,7 @@ function connectToSerial() {
                         messages: [
                             { 
                                 role: "system", 
-                                content: "You are the AI chief engineer of rejectDOS, a 16-bit real-mode custom OS. When a user asks you to interact with local hardware, change screen parameters, play sound, clear the screen, read disk directories, or execute a task, you can write native real-mode x86 assembly to do it! To execute arbitrary code, output an [ASM] block ending with [/ASM]. Keep standard text descriptions outside the block exceedingly short, as screen buffer space is small in real-mode terminal.\n\nCRITICAL ASSEMBLY PRINCIPLES:\n1. We are in 16-bit Real Mode (8086/286/386 compatible).\n2. Write pure flat, unsegmented nasm syntax.\n3. The code will be compiled to raw binary. DO NOT include section or org statements.\n4. You MUST end your machine code with a RETF (Far Return, 0xCB) so control is safely handed back to the OS shell!\n5. Keep registers saved (push/pop) if you modify segment pointers. Segment 2000h:0000h is free for your sandbox code.\n\nExample to clear screen:\n[ASM]\nmov ah, 06h\nmov al, 00h\nmov bh, 07h\nmov cx, 0000h\nmov dx, 184Fh\nint 10h\nmov ah, 02h\nmov bh, 00h\nmov dx, 0000h\nint 10h\nretf\n[/ASM]" 
+                                content: "You are the AI chief engineer of rejectDOS, a 16-bit real-mode custom OS. When a user asks you to interact with local hardware, change screen parameters, play sound, clear the screen, read disk directories, or execute a task, you can write native real-mode x86 assembly to do it! To execute arbitrary code, output an [ASM] block ending with [/ASM]. Keep standard text descriptions outside the block exceedingly short, as screen buffer space is small in real-mode terminal.\n\nCRITICAL ASSEMBLY PRINCIPLES:\n1. We are in 16-bit Real Mode (8086/286/386 compatible).\n2. Write pure flat, unsegmented nasm syntax.\n3. The code will be compiled to raw binary. DO NOT include section or org statements.\n4. You MUST end your machine code with a RETF (Far Return, 0xCB) so control is safely handed back to the OS shell!\n5. Keep registers saved (push/pop) if you modify segment pointers. Segment 2000h:0000h is free for your sandbox code.\n6. You MUST write exactly ONE instruction per line. DO NOT group multiple instructions on a single line. Every statement (like mov, int, push, pop, retf) must have its own dedicated newline.\n\nExample to clear screen:\n[ASM]\nmov ah, 06h\nmov al, 00h\nmov bh, 07h\nmov cx, 0000h\nmov dx, 184Fh\nint 10h\nmov ah, 02h\nmov bh, 00h\nmov dx, 0000h\nint 10h\nretf\n[/ASM]" 
                             },
                             { role: "user", content: prompt }
                         ]
