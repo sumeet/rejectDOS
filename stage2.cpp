@@ -4,13 +4,59 @@
 #include "term.cpp"
 
 #define INPUT_SIZE 512
+#define TOKENS_SIZE 128
 
-char input[INPUT_SIZE] = {0};
-short input_len = 0;
+char input[INPUT_SIZE];
+short input_len;
+
+struct StringView {
+  char *data;
+  unsigned int len;
+};
+
+enum TokenType {
+  TokenNumber,
+  TokenOperator,
+};
+
+struct Token {
+  TokenType type;
+  StringView value;
+};
+
+Token tokens[TOKENS_SIZE];
+short tokens_len;
+
+void tokenize(char *input) {
+  tokens_len = 0;
+  char *c = input;
+  while (*c) {
+    if (*c >= '0' && *c <= '9') {
+      char *start = c;
+      //while (*c >= '0' && *c <= '9') c++;
+      Token token = tokens[tokens_len++];
+      token.type = TokenNumber;
+      token.value.data = start;
+      token.value.len = c - start;
+    } else if (*c == '+') {
+    //} else if (*c == '+' || *c == '-' || *c == '*' || *c == '/') {
+      Token token = tokens[tokens_len++];
+      token.type = TokenOperator;
+      token.value.data = c;
+    } else if (*c == ' ') {
+      // do nothing
+    } else {
+      putc(*c);
+      return;
+    }
+    c++;
+  }
+}
 
 void eval() {
     print("evaluating: ");
     println(input);
+    tokenize(input);
 }
 
 int main(void) {

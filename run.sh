@@ -7,4 +7,4 @@ if [ "$DEBUG" ]; then
 fi
 
 # `tput reset` supposed to be faster than regular `reset`
-qemu-system-i386 -cpu qemu32 -fda bootloader.bin $GDB_FLAGS -nographic ; tput reset
+qemu-system-i386 -cpu qemu32 -fda bootloader.bin $GDB_FLAGS ; tput reset
