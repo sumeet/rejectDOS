@@ -6,6 +6,7 @@ cd /home/bashtv/rejectDOS
 # Setup OpenWatcom paths
 export WATCOM=/home/bashtv/openwatcom
 export PATH=$WATCOM/binl:$PATH
+export INCLUDE=$WATCOM/h
 
 # 1. Compile Stage 1 components (C++ Logo and Wrapper)
 echo "=== STEP 1: COMPILING STAGE 1 (LOGO) ==="
