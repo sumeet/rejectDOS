@@ -9,6 +9,7 @@ if (!OPENROUTER_API_KEY) {
 }
 
 const SERIAL_PORT = 4444;
+let activeSocket = null;
 
 function cleanOutputText(text) {
     if (!text) return "";
@@ -20,7 +21,7 @@ function cleanOutputText(text) {
         .replace(/\u2026/g, "...");      // Ellipsis -> ...
 }
 
-console.log("Starting Agentic x86 Assembly Compiler serial bridge...");
+console.log("Starting Resilient Agentic TCP Server...");
 
 // Maintain Chat History/Memory for the Agent
 let chatHistory = [
@@ -79,14 +80,26 @@ function compileAssembly(asmCode) {
     }
 }
 
-function connectToSerial() {
-    const client = net.createConnection({ port: SERIAL_PORT, host: '127.0.0.1' }, () => {
-        console.log("Connected to QEMU Virtual Serial COM1 on Port 4444!");
-    });
+// Start Resident Local TCP Server listening on Port 4444 for incoming QEMU client connections
+const server = net.createServer((socket) => {
+    console.log("Connected to QEMU Virtual Serial COM1!");
+    
+    // Clear any stale unclosed socket instantly
+    if (activeSocket) {
+        console.log("Discarding previous socket handle connection.");
+        activeSocket.destroy();
+    }
+    activeSocket = socket;
 
     let buffer = "";
 
-    client.on('data', async (data) => {
+    socket.on('data', async (data) => {
+        // Handle Ping Challenge (0x05 ENQ) from QEMU - respond with Pong (0x06 ACK) immediately
+        if (data.length === 1 && data[0] === 0x05) {
+            socket.write(Buffer.from([0x06]));
+            return;
+        }
+
         const text = data.toString('utf-8');
         
         // Check if we are receiving high-priority user response confirmation of a tool call
@@ -103,6 +116,12 @@ function connectToSerial() {
             console.log(`\n[OS -> Serial] received query: "${prompt}"`);
             chatHistory.push({ role: "user", content: prompt });
             
+            // Start Keep-Alive Heartbeat (0x05 ENQ) to prevent QEMU timeout while we wait for OpenRouter API
+            const heartbeat = setInterval(() => {
+                console.log("[Bridge -> OS] Sending Heartbeat...");
+                socket.write(Buffer.from([0x05]));
+            }, 600);
+
             try {
                 console.log("[Bridge] Dispatching query to OpenRouter...");
                 const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -118,6 +137,9 @@ function connectToSerial() {
                         messages: chatHistory
                     })
                 });
+
+                // Clear heartbeat as soon as data returns
+                clearInterval(heartbeat);
 
                 const result = await response.json();
                 let reply = result.choices?.[0]?.message?.content || "Error: Empty response from model.";
@@ -137,25 +159,25 @@ function connectToSerial() {
 
                     // 1. Send conversational text first (standard text streaming)
                     if (chatText) {
-                        client.write(cleanOutputText(chatText) + "\n");
+                        socket.write(cleanOutputText(chatText) + "\n");
                     }
 
                     // 2. Send Tool escape trigger: ESC (0x1B) + 'T' (0x54) 
                     const header = Buffer.alloc(2);
                     header[0] = 0x1B; // ESC
                     header[1] = 0x54; // 'T' for Tool Call
-                    client.write(header);
+                    socket.write(header);
 
                     // 3. Write description ending with a single newline
-                    client.write(cleanOutputText(description) + "\n");
+                    socket.write(cleanOutputText(description) + "\n");
                     
                     // 4. Write Assembly Body lines and end with \x00 (Null terminator)
-                    client.write(asmCode + "\n\x00");
+                    socket.write(asmCode + "\n\x00");
 
                     // 5. Setup synchronous user y/n confirmation listener over TCP
                     const handleConfirmation = (confirmData) => {
                         const choice = confirmData.toString('utf-8').trim().toLowerCase();
-                        client.removeListener('data', handleConfirmation); // Remove hook
+                        socket.removeListener('data', handleConfirmation); // Remove hook
 
                         if (choice === 'y') {
                             console.log("[Bridge] User authorized payload execution. Compiling...");
@@ -170,44 +192,48 @@ function connectToSerial() {
                                 binaryHeader[3] = (payloadSize >> 8) & 0xFF; // High byte
 
                                 console.log(`[Bridge] Sending binary header and ${payloadSize} machine bytes...`);
-                                client.write(binaryHeader);
-                                client.write(compileResult.data);
+                                socket.write(binaryHeader);
+                                socket.write(compileResult.data);
                             } else {
                                 console.error("[Bridge] Payload compilation failed:", compileResult.error);
-                                client.write(`AI Compilation Error:\n${compileResult.error}\n`);
+                                socket.write(`AI Compilation Error:\n${compileResult.error}\n`);
                             }
                         } else {
                             console.log("[Bridge] User aborted payload execution.");
                         }
 
                         // Always terminate the stream with EOT to give control back to terminal prompt
-                        client.write(Buffer.from([0x04]));
+                        socket.write(Buffer.from([0x04]));
                     };
 
-                    client.on('data', handleConfirmation);
+                    socket.on('data', handleConfirmation);
 
                 } else {
                     // Normal conversational reply with no tool call
-                    client.write(cleanOutputText(reply) + "\n\x04");
+                    socket.write(cleanOutputText(reply) + "\n\x04");
                 }
                 
             } catch (err) {
+                clearInterval(heartbeat);
                 console.error("Bridge Error: ", err);
-                client.write(`Bridge Error: ${err.message}\n\x04`);
+                socket.write(`Bridge Error: ${err.message}\n\x04`);
             }
         }
     });
 
-    client.on('error', (err) => {
-        console.log("Waiting for QEMU to start up or serial connection error... retrying in 2s");
-        setTimeout(connectToSerial, 2000);
+    socket.on('error', (err) => {
+        console.log("Socket connection error:", err.message);
+        socket.destroy();
+        if (activeSocket === socket) activeSocket = null;
     });
 
-    client.on('end', () => {
-        console.log("Serial connection closed. Retrying...");
-        setTimeout(connectToSerial, 2000);
+    socket.on('end', () => {
+        console.log("Socket connection closed.");
+        socket.destroy();
+        if (activeSocket === socket) activeSocket = null;
     });
-}
+});
 
-// Join loop
-connectToSerial();
+server.listen(SERIAL_PORT, '127.0.0.1', () => {
+    console.log(`TCP Server is listening on 127.0.0.1:${SERIAL_PORT}`);
+});

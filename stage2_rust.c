@@ -148,9 +148,45 @@ int read_serial_timeout(unsigned int max_ticks) {
     return inp(PORT_COM1);
 }
 
-// Write byte over serial UART
+// Check if the host bridge is online using an ENQ/ACK (0x05/0x06) challenge
+int is_host_online(void) {
+    unsigned int far *timer_ptr;
+    unsigned int start_ticks;
+    
+    // Clear any stale serial buffer residue
+    while (serial_received()) {
+        inp(PORT_COM1);
+    }
+    
+    // Write 0x05 Ping challenge
+    outp(PORT_COM1, 5);
+    
+    // Wait up to 500ms (10 ticks) for a 0x06 Pong response
+    timer_ptr = (unsigned int far *)0x0040006C;
+    start_ticks = *timer_ptr;
+    while (serial_received() == 0) {
+        if (*timer_ptr - start_ticks > 10) {
+            return 0; // Host is offline!
+        }
+    }
+    
+    // Read response character
+    if (inp(PORT_COM1) == 6) {
+        return 1; // Host is online!
+    }
+    return 0;
+}
+
+// Non-blocking write: drops byte if transmit buffer blocks for >250ms (5 ticks)
 void write_serial(char a) {
-    while ((inp(PORT_COM1 + 5) & 0x20) == 0);
+    unsigned int far *timer_ptr = (unsigned int far *)0x0040006C;
+    unsigned int start_ticks = *timer_ptr;
+    
+    while ((inp(PORT_COM1 + 5) & 0x20) == 0) {
+        if (*timer_ptr - start_ticks > 5) {
+            return; // Online connection lost, abort write safely
+        }
+    }
     outp(PORT_COM1, a);
 }
 
@@ -374,7 +410,13 @@ void ask_ai(void) {
     char c;
     unsigned int far *timer_ptr = (unsigned int far *)0x0040006C;
     unsigned int start_ticks = *timer_ptr;
-    unsigned int max_wait = 364; // Wait up to 20 seconds for the first character response
+    unsigned int max_wait = 91; // 5 seconds wait window for heartbeat
+    
+    // challenge the host first to verify online connectivity
+    if (is_host_online() == 0) {
+        print("Agent is currently sleeping. (Math/Dice operations active)\r\n");
+        return;
+    }
     
     // Write entire prompt message over serial
     print_serial(input);
@@ -382,20 +424,28 @@ void ask_ai(void) {
     
     // Receive and echo characters until End of Transmission (EOT)
     while (1) {
-        // Safe timeout block waiting for serial ready
+        // Safe timeout block waiting for serial ready or heartbeat
         while (serial_received() == 0) {
             unsigned int current_ticks = *timer_ptr;
             unsigned int delta = current_ticks - start_ticks;
             if (delta > max_wait) {
-                print("\r\n[Error: AI Agent response timeout. Rescheduling...]\r\n");
+                print("\r\n[Fatal Error: Connection to Serial Bridge lost.]\r\n");
                 return; // Return safely to terminal!
             }
         }
         
         c = inp(PORT_COM1);
         
-        // Reset timers dynamically and shrink the window to 3 seconds for streaming
+        // Reset timers dynamically 
         start_ticks = *timer_ptr;
+        
+        // If we received a 0x05 Ping Keep-Alive heartbeat, silently swallow it and stay in loop!
+        if (c == 0x05) {
+            max_wait = 91; // Prolong wait (reset 5s heartbeat window)
+            continue;
+        }
+        
+        // Set standard character streaming window to 3 seconds
         max_wait = 55;
         
         if (c == 0x1B) { // ESC!
