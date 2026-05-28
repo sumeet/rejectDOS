@@ -27,69 +27,135 @@ eval:
 	.cfi_def_cfa_offset 16
 	pushl	%esi
 	.cfi_def_cfa_offset 20
+	pushl	%eax
+	.cfi_def_cfa_offset 24
 	.cfi_offset %esi, -20
 	.cfi_offset %edi, -16
 	.cfi_offset %ebx, -12
 	.cfi_offset %ebp, -8
-	movzwl	24(%esp), %eax
-	testw	%ax, %ax
-	je	.LBB1_1
-	movl	20(%esp), %edx
-	movzwl	%ax, %esi
-	movb	$43, %al
-	xorl	%edi, %edi
-	xorl	%ecx, %ecx
-	jmp	.LBB1_8
+	movzwl	28(%esp), %edi
+	testl	%edi, %edi
+	je	.LBB1_22
+	movl	24(%esp), %ebp
+	movb	$43, %dl
+	xorl	%eax, %eax
+	xorl	%esi, %esi
+	addl	%ebp, %edi
+	jmp	.LBB1_4
 	.p2align	4
-.LBB1_17:
-	addl	%ecx, %ecx
-	leal	(%ecx,%ecx,4), %ebp
-	movzbl	%bh, %ecx
-	addl	%ebp, %ecx
-.LBB1_16:
-	incl	%edx
-	decl	%esi
-	je	.LBB1_3
-.LBB1_8:
-	movzbl	(%edx), %ebx
-	movb	%bl, %bh
-	addb	$-48, %bh
-	cmpb	$10, %bh
-	jb	.LBB1_17
-	movzbl	%bl, %ebp
-	cmpl	$43, %ebp
-	je	.LBB1_11
-	cmpl	$45, %ebp
-	jne	.LBB1_16
-.LBB1_11:
-	cmpb	$45, %al
-	je	.LBB1_14
-	movzbl	%al, %eax
-	cmpl	$43, %eax
-	jne	.LBB1_15
-	addl	%ecx, %edi
-	jmp	.LBB1_15
-.LBB1_14:
-	subl	%ecx, %edi
-.LBB1_15:
-	xorl	%ecx, %ecx
-	movl	%ebx, %eax
-	jmp	.LBB1_16
-.LBB1_3:
-	cmpb	$43, %al
-	je	.LBB1_2
-	movzbl	%al, %eax
-	cmpl	$45, %eax
-	jne	.LBB1_6
-	subl	%ecx, %edi
-	jmp	.LBB1_6
-.LBB1_1:
-	xorl	%edi, %edi
-	xorl	%ecx, %ecx
 .LBB1_2:
-	addl	%ecx, %edi
-.LBB1_6:
-	movl	%edi, %eax
+	movl	(%esp), %ecx
+	xorl	%esi, %esi
+	movl	%ecx, %edx
+.LBB1_3:
+	incl	%ebp
+	cmpl	%edi, %ebp
+	jae	.LBB1_16
+.LBB1_4:
+	movzbl	(%ebp), %ecx
+	movl	%ecx, (%esp)
+	addl	$-37, %ecx
+	cmpl	$10, %ecx
+	ja	.LBB1_12
+	movl	$1377, %ebx
+	btl	%ecx, %ebx
+	jae	.LBB1_12
+	movl	%edx, %ebx
+	xorl	%edx, %edx
+	movl	$0, %ecx
+	cmpb	$43, %bl
+	cmovel	%esi, %ecx
+	addl	%ecx, %eax
+	cmpb	$45, %bl
+	movl	%eax, %ecx
+	cmovel	%esi, %edx
+	movl	$1, %eax
+	subl	%edx, %ecx
+	cmpb	$42, %bl
+	cmovel	%esi, %eax
+	imull	%ecx, %eax
+	cmpb	$37, %bl
+	je	.LBB1_10
+	movzbl	%bl, %edx
+	cmpl	$47, %edx
+	jne	.LBB1_2
+	movl	(%esp), %ebx
+	testw	%si, %si
+	jne	.LBB1_14
+	xorl	%esi, %esi
+	movl	%ebx, %edx
+	xorl	%eax, %eax
+	jmp	.LBB1_3
+	.p2align	4
+.LBB1_10:
+	testw	%si, %si
+	jne	.LBB1_15
+	movl	(%esp), %eax
+	xorl	%esi, %esi
+	movl	%eax, %edx
+	xorl	%eax, %eax
+	jmp	.LBB1_3
+.LBB1_12:
+	movl	(%esp), %ebx
+	addb	$-48, %bl
+	cmpb	$9, %bl
+	ja	.LBB1_3
+	addl	%esi, %esi
+	leal	(%esi,%esi,4), %ecx
+	movzbl	%bl, %esi
+	addl	%ecx, %esi
+	jmp	.LBB1_3
+.LBB1_14:
+	movl	%ecx, %eax
+	xorl	%edx, %edx
+	divw	%si
+	xorl	%esi, %esi
+	movl	%ebx, %edx
+	jmp	.LBB1_3
+.LBB1_15:
+	xorl	%edx, %edx
+	divw	%si
+	movl	(%esp), %eax
+	xorl	%esi, %esi
+	movl	%eax, %ecx
+	movl	%edx, %eax
+	movl	%ecx, %edx
+	jmp	.LBB1_3
+.LBB1_16:
+	cmpb	$45, %dl
+	je	.LBB1_24
+	movzbl	%dl, %ecx
+	cmpl	$43, %ecx
+	je	.LBB1_23
+	cmpb	$42, %dl
+	movl	%edx, %ebx
+	movl	$1, %edx
+	cmovel	%esi, %edx
+	imull	%eax, %edx
+	cmpb	$37, %bl
+	je	.LBB1_26
+	cmpl	$47, %ecx
+	jne	.LBB1_25
+	testw	%si, %si
+	je	.LBB1_29
+	xorl	%edx, %edx
+	divw	%si
+	movl	%eax, %edx
+	jmp	.LBB1_25
+.LBB1_22:
+	xorl	%eax, %eax
+	xorl	%esi, %esi
+.LBB1_23:
+	addl	%eax, %esi
+	movl	%esi, %eax
+	xorl	%esi, %esi
+.LBB1_24:
+	subl	%esi, %eax
+	movl	%eax, %edx
+.LBB1_25:
+	movl	%edx, %eax
+	addl	$4, %esp
+	.cfi_def_cfa_offset 20
 	popl	%esi
 	.cfi_def_cfa_offset 16
 	popl	%edi
@@ -99,6 +165,17 @@ eval:
 	popl	%ebp
 	.cfi_def_cfa_offset 4
 	retl
+.LBB1_26:
+	.cfi_def_cfa_offset 24
+	testw	%si, %si
+	je	.LBB1_29
+	movl	%edx, %eax
+	xorl	%edx, %edx
+	divw	%si
+	jmp	.LBB1_25
+.LBB1_29:
+	xorl	%edx, %edx
+	jmp	.LBB1_25
 .Lfunc_end1:
 	.size	eval, .Lfunc_end1-eval
 	.cfi_endproc
